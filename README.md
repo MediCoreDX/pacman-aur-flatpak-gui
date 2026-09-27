@@ -130,7 +130,6 @@ Ideen für zukünftige Erweiterungen (Beiträge willkommen):
  Systemtray-Icon mit Update-Benachrichtigung
  AUR-Popularität/Votes über die AUR-RPC-API anzeigen
  Konfigurierbare Kategorie-Regeln über eine externe Datei
-Mitwirken
 
 Issues und Pull Requests sind jederzeit willkommen:
 
@@ -138,3 +137,5 @@ Repository forken
 Feature-Branch erstellen (git checkout -b feature/mein-feature)
 Änderungen committen
 Branch pushen und Pull Request öffnen
+
+Medic0re.DX@proton.me
