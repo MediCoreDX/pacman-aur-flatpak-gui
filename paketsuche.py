@@ -22,8 +22,10 @@ Start:
 Hinweis: Nutzt pty.fork() und ist damit auf Linux/Unix beschränkt.
 """
  
+import json
 import os
 import re
+import shlex
 import pty
 import signal
 import shutil
@@ -69,8 +71,57 @@ def guess_category(name):
         if re.search(pattern, lname):
             return icon, label
     return "📦", "Sonstiges"
- 
- 
+
+
+def shell_join(command_parts):
+    return " ".join(shlex.quote(str(part)) for part in command_parts)
+
+
+def build_install_command(pkg):
+    if pkg["installed"]:
+        return ["sudo", "pacman", "-Rns", pkg["name"]]
+    if pkg["source"] == "repo":
+        return ["sudo", "pacman", "-S", pkg["name"]]
+    return ["yay", "-S", pkg["name"]]
+
+
+def build_install_commands_for_selection(pkgs):
+    repo_names = [p["name"] for p in pkgs if p["source"] == "repo"]
+    aur_names = [p["name"] for p in pkgs if p["source"] == "aur"]
+
+    commands = []
+    if repo_names:
+        commands.append(["sudo", "pacman", "-S", *repo_names])
+    if aur_names:
+        commands.append(["yay", "-S", *aur_names])
+    return commands
+
+
+def build_sequence_command(commands):
+    commands = [list(command) for command in commands]
+    if not commands:
+        return ["true"]
+    if len(commands) == 1:
+        return commands[0]
+
+    script = """
+import json
+import subprocess
+import sys
+
+commands = json.loads(sys.argv[1])
+for command in commands:
+    result = subprocess.run(command, check=False)
+    if result.returncode != 0:
+        raise SystemExit(result.returncode)
+"""
+    return ["python3", "-c", script, json.dumps(commands)]
+
+
+def command_available(cmd):
+    return shutil.which(cmd) is not None
+
+
 # ----------------------------------------------------------------------
 # Passwort-Dialog (maskierte Eingabe für sudo)
 # ----------------------------------------------------------------------
@@ -117,21 +168,30 @@ class PasswordDialog(ctk.CTkToplevel):
 # ----------------------------------------------------------------------
  
 class LiveOutputDialog(ctk.CTkToplevel):
-    def __init__(self, master, title, command_str):
+    def __init__(self, master, title, command):
         super().__init__(master)
         self.title(title)
         self.geometry("720x480")
- 
-        self.command_str = command_str
+
+        if isinstance(command, (list, tuple)) and command and isinstance(command[0], (list, tuple)):
+            self.command = build_sequence_command(command)
+            self.command_display = " && ".join(shell_join(sub_cmd) for sub_cmd in command)
+        elif isinstance(command, (list, tuple)):
+            self.command = list(command)
+            self.command_display = shell_join(self.command)
+        else:
+            self.command = ["bash", "-lc", command]
+            self.command_display = command
+
         self.child_pid = None
         self.master_fd = None
         self.awaiting_password = False
         self.finished = False
- 
+
         self.protocol("WM_DELETE_WINDOW", self.on_close)
- 
+
         info = ctk.CTkLabel(
-            self, text=command_str, font=ctk.CTkFont(family="monospace", size=12),
+            self, text=self.command_display, font=ctk.CTkFont(family="monospace", size=12),
             text_color="gray", anchor="w", wraplength=680, justify="left"
         )
         info.pack(fill="x", padx=14, pady=(14, 6))
@@ -180,9 +240,8 @@ class LiveOutputDialog(ctk.CTkToplevel):
             return
  
         if pid == 0:
-            # Kindprozess: ersetzt sich selbst durch bash -c "<command>"
             try:
-                os.execvp("bash", ["bash", "-c", self.command_str])
+                os.execvp(self.command[0], self.command)
             except Exception:
                 os._exit(1)
             return
@@ -289,7 +348,12 @@ class DetailDialog(ctk.CTkToplevel):
             cmd = ["pacman", "-Si", pkg["name"]]
         else:
             cmd = ["yay", "-Si", pkg["name"]]
- 
+
+        if not command_available(cmd[0]):
+            text = f"Befehl '{cmd[0]}' wurde nicht gefunden."
+            self.after(0, self.show_text, text)
+            return
+
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
             text = result.stdout.strip() or result.stderr.strip() or "Keine Details gefunden."
@@ -297,7 +361,7 @@ class DetailDialog(ctk.CTkToplevel):
             text = f"Befehl '{cmd[0]}' wurde nicht gefunden."
         except Exception as e:
             text = f"Fehler beim Laden der Details: {e}"
- 
+
         self.after(0, self.show_text, text)
  
     def show_text(self, text):
@@ -343,8 +407,8 @@ class UpdatesDialog(ctk.CTkToplevel):
     def load_updates(self):
         repo_updates = None  # None = checkupdates nicht installiert
         aur_updates = []
- 
-        if shutil.which("checkupdates"):
+
+        if command_available("checkupdates"):
             try:
                 out = subprocess.run(
                     ["checkupdates"], capture_output=True, text=True, timeout=30
@@ -352,8 +416,8 @@ class UpdatesDialog(ctk.CTkToplevel):
                 repo_updates = [l for l in out.strip().splitlines() if l]
             except Exception:
                 repo_updates = []
- 
-        if shutil.which("yay"):
+
+        if command_available("yay"):
             try:
                 out = subprocess.run(
                     ["yay", "-Qua"], capture_output=True, text=True, timeout=30
@@ -361,7 +425,7 @@ class UpdatesDialog(ctk.CTkToplevel):
                 aur_updates = [l for l in out.strip().splitlines() if l]
             except Exception:
                 aur_updates = []
- 
+
         self.after(0, self.show_updates, repo_updates, aur_updates)
  
     def show_updates(self, repo_updates, aur_updates):
@@ -396,7 +460,7 @@ class UpdatesDialog(ctk.CTkToplevel):
             self.status_label.configure(text="System ist aktuell.")
  
     def run_update(self):
-        cmd = "yay -Syu" if shutil.which("yay") else "sudo pacman -Syu"
+        cmd = ["yay", "-Syu"] if shutil.which("yay") else ["sudo", "pacman", "-Syu"]
         LiveOutputDialog(self.master_app, "System-Update", cmd)
         self.destroy()
  
@@ -575,24 +639,28 @@ class PackageSearchApp(ctk.CTk):
  
     def run_search(self, query, cancel_event):
         source = self.source_selector.get()
- 
-        # Welche Quellen wurden angefragt? Nur darauf warten wir.
+
         wants_repo = source in ("Beide", "Nur Pacman")
         wants_aur = source in ("Beide", "Nur AUR (yay)")
- 
+
         self.pending_sources = set()
         if wants_repo:
             self.pending_sources.add("repo")
         if wants_aur:
             self.pending_sources.add("aur")
- 
-        if wants_repo:
+
+        if wants_repo and not command_available("pacman"):
+            self.after(0, self.on_partial_results, "repo", [], query)
+        if wants_aur and not command_available("yay"):
+            self.after(0, self.on_partial_results, "aur", [], query)
+
+        if wants_repo and command_available("pacman"):
             threading.Thread(
                 target=lambda: self._search_and_report(
                     self.search_pacman, query, cancel_event, "repo"
                 ), daemon=True
             ).start()
-        if wants_aur:
+        if wants_aur and command_available("yay"):
             threading.Thread(
                 target=lambda: self._search_and_report(
                     self.search_aur, query, cancel_event, "aur"
@@ -635,6 +703,8 @@ class PackageSearchApp(ctk.CTk):
         self.render_results()
  
     def search_pacman(self, query, cancel_event):
+        if not command_available("pacman"):
+            return []
         try:
             proc = subprocess.Popen(
                 ["pacman", "-Ss", query],
@@ -646,8 +716,10 @@ class PackageSearchApp(ctk.CTk):
             return self.parse_output(stdout, source="repo")
         except Exception:
             return []
- 
+
     def search_aur(self, query, cancel_event):
+        if not command_available("yay"):
+            return []
         try:
             proc = subprocess.Popen(
                 ["yay", "-Ssa", query],
@@ -817,12 +889,10 @@ class PackageSearchApp(ctk.CTk):
             text_color="gray", anchor="w", justify="left", wraplength=700
         ).pack(fill="x", padx=12, pady=(4, 6))
  
-        action_cmd = (
-            f"sudo pacman -Rns {pkg['name']}" if pkg["installed"]
-            else (f"sudo pacman -S {pkg['name']}" if pkg["source"] == "repo" else f"yay -S {pkg['name']}")
-        )
+        action_cmd = build_install_command(pkg)
+        action_display = shell_join(action_cmd)
         ctk.CTkLabel(
-            card, text=action_cmd, font=self.font_mono_small,
+            card, text=action_display, font=self.font_mono_small,
             text_color="gray", anchor="w"
         ).pack(fill="x", padx=12, pady=(0, 6))
  
@@ -855,7 +925,7 @@ class PackageSearchApp(ctk.CTk):
             font=self.font_small
         )
         copy_btn.pack(side="left")
-        copy_btn.configure(command=lambda c=action_cmd, b=copy_btn: self.copy_command(c, b))
+        copy_btn.configure(command=lambda c=action_display, b=copy_btn: self.copy_command(c, b))
  
     # ---------- Mehrfachauswahl ----------
  
@@ -880,19 +950,15 @@ class PackageSearchApp(ctk.CTk):
  
     def install_selected(self):
         pkgs = [self.results_by_key[k] for k in self.selected_keys if k in self.results_by_key]
+        pkgs = [pkg for pkg in pkgs if not pkg["installed"]]
         if not pkgs:
             return
-        repo_names = [p["name"] for p in pkgs if p["source"] == "repo"]
-        aur_names = [p["name"] for p in pkgs if p["source"] == "aur"]
- 
-        parts = []
-        if repo_names:
-            parts.append(f"sudo pacman -S {' '.join(repo_names)}")
-        if aur_names:
-            parts.append(f"yay -S {' '.join(aur_names)}")
-        full_cmd = " && ".join(parts)
- 
-        LiveOutputDialog(self, f"Installiere {len(pkgs)} Paket(e)", full_cmd)
+
+        commands = build_install_commands_for_selection(pkgs)
+        if not commands:
+            return
+
+        LiveOutputDialog(self, f"Installiere {len(pkgs)} Paket(e)", commands)
  
     # ---------- Aktionen ----------
  
@@ -905,11 +971,11 @@ class PackageSearchApp(ctk.CTk):
         self.after(1500, lambda: button.configure(text=original_text))
  
     def install_package(self, pkg):
-        cmd = f"sudo pacman -S {pkg['name']}" if pkg["source"] == "repo" else f"yay -S {pkg['name']}"
+        cmd = build_install_command(pkg)
         LiveOutputDialog(self, f"Installiere {pkg['name']}", cmd)
- 
+
     def uninstall_package(self, pkg):
-        cmd = f"sudo pacman -Rns {pkg['name']}"
+        cmd = build_install_command(pkg)
         LiveOutputDialog(self, f"Deinstalliere {pkg['name']}", cmd)
  
     def show_package_details(self, pkg):
