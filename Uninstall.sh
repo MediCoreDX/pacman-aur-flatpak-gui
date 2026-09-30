@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# Entfernt die per install.sh installierte Paketsuche-App wieder vollständig.
-set -e
- 
-APP_NAME="paketsuche"
-INSTALL_DIR="$HOME/.local/bin"
-DESKTOP_DIR="$HOME/.local/share/applications"
- 
-rm -f "$INSTALL_DIR/$APP_NAME"
-rm -f "$DESKTOP_DIR/$APP_NAME.desktop"
- 
-if command -v update-desktop-database &>/dev/null; then
-    update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
+
+set -Eeuo pipefail
+
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+APP_DIR="$DATA_HOME/paketsuche"
+BIN_DIR="$HOME/.local/bin"
+DESKTOP_DIR="$DATA_HOME/applications"
+
+rm -f -- "$BIN_DIR/paketsuche" "$DESKTOP_DIR/paketsuche.desktop"
+rm -rf -- "$APP_DIR"
+
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "$DESKTOP_DIR"
 fi
- 
-echo "✓ Paketsuche wurde deinstalliert."
-echo "  (customtkinter wurde nicht entfernt, falls andere Programme es nutzen.)"
+
+echo "Paketsuche wurde entfernt."
+echo "Andere Python-Pakete und Benutzerdaten wurden nicht verändert."

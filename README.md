@@ -1,141 +1,133 @@
-🔍 Paketsuche – Pacman & AUR GUI
+# Paketsuche – Pacman & AUR
 
-Eine moderne, schlichte grafische Oberfläche zum Durchsuchen, Installieren und Verwalten von Paketen auf Arch-basierten Systemen (entwickelt und getestet auf Manjaro) – sowohl aus den offiziellen Repositories (pacman) als auch aus dem AUR (yay). Kein Terminal-Wissen nötig, keine externe Konsole beim Installieren – alles läuft in einem sauberen, dunklen GUI-Fenster.
+Eine grafische Paketverwaltung für Arch Linux und Arch-basierte Distributionen
+wie Manjaro. Die App durchsucht offizielle Pacman-Repositories und optional das
+AUR über `yay`. Sie verwendet `pacman` und `yay` als Unterprozesse; sie ersetzt
+keinen Paketmanager und umgeht keine Systemberechtigungen.
 
-<!-- Badges -->
+## Funktionen
 
-Inhaltsverzeichnis
-Warum dieses Tool?
-Features im Detail
-Voraussetzungen
-Installation
-Nutzung
-Wie es funktioniert
-Deinstallation
-Troubleshooting / FAQ
-Roadmap
-Mitwirken
-Lizenz
-Warum dieses Tool?
+- Repo- und AUR-Suche parallel mit nachladenden Teilergebnissen
+- Suche abbrechen, Ergebnisliste filtern, sortieren und seitenweise anzeigen
+- Paketdetails für installierte und verfügbare Pakete
+- Pakete einzeln oder gesammelt installieren sowie installierte Pakete entfernen
+- Interaktive Paketmanager-Ausgabe einschließlich Terminal-Eingaben und
+  maskierter `sudo`-Passwortabfrage direkt im Fenster
+- Update-Prüfung mit `checkupdates` und `yay -Qua`
+- System-Update über `yay -Syu` oder, falls `yay` fehlt, `sudo pacman -Syu`
+- Paketkategorien und Kopierfunktion für Paketmanager-Befehle
 
-pacman und yay sind mächtig, aber rein kommandozeilenbasiert. Wer schnell mal ein Paket suchen, Details nachschlagen oder mehrere Pakete auf einen Schlag installieren möchte, ohne sich Flags zu merken, bekommt hier eine aufgeräumte grafische Alternative – ohne dabei die Kontrolle über den tatsächlich ausgeführten Befehl zu verlieren (jeder Befehl wird transparent angezeigt, bevor er läuft).
+## Voraussetzungen
 
-Features im Detail
-🔎 Suche
-Durchsucht offizielle Repos (pacman -Ss) und/oder das AUR (yay -Ssa) gleichzeitig, in parallelen Threads – keine Wartezeit durch sequenzielle Abfragen.
-Progressive Anzeige: Repo-Treffer erscheinen sofort, AUR-Treffer werden nachgeladen, sobald sie da sind (AUR-Netzwerkabfragen sind meist der langsamere Teil).
-Suche jederzeit abbrechbar, auch mitten im Lauf.
- Filtern & Sortieren
-Anzeige-Filter: Alle / Nur installierte / Nur nicht installierte Pakete.
-Quellen-Filter (unabhängig von der Suchquelle): Alle / Nur Repo / Nur AUR.
-Sortierung: Name (A–Z / Z–A), Installiert zuerst, nach Quelle.
-Kategorie-Erkennung
+| Komponente | Erforderlich für |
+| --- | --- |
+| Linux / Unix mit `pty.fork()` | App und interaktive Paketmanager-Ausgabe |
+| Python 3.10 oder neuer | App |
+| Pacman | Suche und Verwaltung offizieller Pakete |
+| `customtkinter` | grafische Oberfläche; installiert durch `install.sh` |
+| `yay` | AUR-Suche/-Pakete und komfortable System-Updates (optional) |
+| `pacman-contrib` | Repo-Update-Prüfung mit `checkupdates` (optional) |
 
-Jedes Paket bekommt automatisch ein Kategorie-Badge (z. B.  Python, Entwicklung, Gaming, KDE, GNOME, Schriftart, Bibliothek, ...) basierend auf Namensmustern – auf einen Blick erkennbar, worum es sich handelt.
+`pacman` und `yay` müssen im `PATH` liegen. Für Systemänderungen fragt
+`sudo` nach den üblichen Rechten. Die App verlangt selbst keine Root-Rechte.
 
-Paket-Details
+## Installation
 
-Klick auf „Details“ öffnet ein Fenster mit der vollständigen Ausgabe von pacman -Qi (installiert), pacman -Si (Repo, nicht installiert) oder yay -Si (AUR, nicht installiert) – Abhängigkeiten, Lizenz, Größe, Homepage etc.
+```bash
+git clone https://github.com/MediCoreDX/pacman-aur-gui.git
+cd pacman-aur-gui
+bash install.sh
+```
 
-Installieren /  Deinstallieren – live im GUI
+Das Installationsskript richtet die App unter
+`${XDG_DATA_HOME:-~/.local/share}/paketsuche` in einer eigenen Python-Umgebung
+ein und legt einen Startmenü-Eintrag sowie `~/.local/bin/paketsuche` an. Es
+installiert keine Systempakete und benötigt kein `sudo`. Für die
+Python-Abhängigkeit ist beim ersten Installieren eine Internetverbindung nötig.
 
-Statt ein externes Terminal zu öffnen, läuft der Installations-/ Deinstallationsbefehl in einem eingebetteten Pseudo-Terminal:
+Danach kannst du **Paketsuche – Pacman & AUR** im Anwendungsmenü starten. Falls
+`~/.local/bin` in deinem `PATH` liegt, geht es auch im Terminal:
 
-Echtzeit-Ausgabe direkt im Fenster.
-Fragt sudo nach dem Passwort, erscheint automatisch ein maskiertes Passwort-Dialogfeld.
-Für sonstige interaktive Rückfragen (z. B. AUR-Bestätigungen, PKGBUILD editieren, Auswahl bei mehreren Anbietern) gibt es ein Eingabefeld, mit dem du direkt in den laufenden Prozess "hineintippen" kannst.
-Jederzeit abbrechbar über einen eigenen „Abbrechen“-Button (killt den Prozess sauber).
-Mehrfachauswahl & Sammelinstallation
+```bash
+paketsuche
+```
 
-Checkbox pro Paketkarte, eine Auswahl-Leiste erscheint automatisch, sobald mindestens ein Paket ausgewählt ist. „Ausgewählte installieren“ baut daraus einen kombinierten Befehl (pacman -S paket1 paket2 ... bzw. yay -S ...) und führt ihn live im GUI aus.
+### Manuell starten
 
-Updates prüfen
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python paketsuche.py
+```
 
-Ein Klick auf „Updates prüfen“ zeigt:
+## Verwendung
 
-Ausstehende Repo-Updates via checkupdates (aus pacman-contrib, kein root nötig, greift nicht in die Paketdatenbank ein).
-Ausstehende AUR-Updates via yay -Qua.
+1. Suchbegriff eingeben und Enter drücken.
+2. Bei Bedarf die Suchquelle, installierten Status, Quelle oder Sortierung
+   einstellen.
+3. Paketdetails ansehen oder einzelne Pakete installieren/deinstallieren.
+4. Für eine Sammelinstallation Pakete markieren und **Ausgewählte installieren**
+   anklicken.
+5. Für Systemupdates **Updates prüfen** öffnen und anschließend bewusst
+   **Jetzt aktualisieren** auswählen.
 
-„Jetzt aktualisieren“ startet direkt yay -Syu (bzw. sudo pacman -Syu, falls yay fehlt) im Live-Ausgabe-Fenster.
+Paketmanager-Befehle laufen in einem eingebetteten Pseudo-Terminal. Ein kleiner
+separater PTY-Relay-Prozess hält `forkpty()` aus dem mehrthreadigen GUI-Prozess
+heraus. Ausgabe und Rückfragen werden angezeigt; bei Abbruch wird zunächst die
+Prozessgruppe beendet und nach drei Sekunden nötigenfalls erzwungen beendet.
+AUR-Builds können trotzdem eigene PKGBUILDs und Rückfragen enthalten. Prüfe die
+Vorschläge des Paketmanagers und AUR-Build-Skripte sorgfältig.
 
-Befehl kopieren
+## Sicherheit und Verhalten
 
-Jede Paketkarte zeigt den zugehörigen Terminal-Befehl an – per Klick landet er in der Zwischenablage, falls du ihn lieber selbst im Terminal ausführen möchtest.
+- Externe Befehle werden mit Argumentlisten und ohne Shell-String-Ausführung
+  gestartet.
+- Paketnamen aus Suchergebnissen werden vor Installationsaktionen validiert.
+- `sudo` wird nur für Pacman-Aktionen verwendet, die administrative Rechte
+  benötigen. AUR-Aktionen laufen als normaler Benutzer über `yay`.
+- Deinstallieren verwendet `pacman -Rns`; lies die angezeigte Paketmanager-
+  Zusammenfassung und bestätige nur, wenn die vorgeschlagenen Änderungen passen.
+- Die Update-Schaltfläche führt ein vollständiges Systemupgrade aus.
+- Die AUR ist nutzergepflegt und nicht Teil der offiziellen Arch-Repositories.
 
-Voraussetzungen
-Komponente	Zweck	Pflicht?
-Arch-basiertes System mit pacman	Repo-Suche & -Installation	Ja
-yay	AUR-Suche, -Installation, System-Update	Optional (ohne yay: reine Repo-Funktionalität)
-Python 3.10+	Laufzeitumgebung Ja
-customtkinter	GUI-Toolkit	Ja (wird von install.sh installiert)
-pacman-contrib (checkupdates)	Repo-Update-Check	Optional
+## Updates und Deinstallation
 
-Hinweis: Die Live-Ausgabe nutzt Pythons pty-Modul und ist damit auf Linux/Unix beschränkt (kein Windows/macOS-Support).
+Zum Aktualisieren den Repository-Ordner aktualisieren und das
+Installationsskript erneut ausführen:
 
-Installation
-Option A – automatisches Install-Skript (empfohlen)
-bash
-git clone https://github.com/<DEIN-USERNAME>/<DEIN-REPO>.git
-cd <DEIN-REPO>
-./install.sh
+```bash
+cd pacman-aur-gui
+git pull --ff-only
+bash install.sh
+```
 
-Das Skript:
+Zum Entfernen:
 
-kopiert paketsuche.py nach ~/.local/bin/paketsuche (ausführbar),
-installiert customtkinter, falls es fehlt (per yay oder pip --user),
-legt einen .desktop-Eintrag in ~/.local/share/applications/ an, damit die App im Anwendungsmenü unter „Paketsuche“ erscheint,
-prüft, ob ~/.local/bin im PATH liegt, und gibt bei Bedarf einen Hinweis aus.
+```bash
+bash Uninstall.sh
+```
 
-Kein root erforderlich – die Installation ist rein benutzerbezogen.
+Das Deinstallationsskript entfernt App, virtuelle Umgebung, Startmenü-Eintrag
+und Launcher. Systempakete und andere Python-Installationen bleiben unverändert.
 
-Option B – manuell, ohne Installation
-bash
-pip install customtkinter --break-system-packages
-python3 paketsuche.py
-Nutzung
-App über das Anwendungsmenü („Paketsuche“) oder per paketsuche im Terminal starten.
-Suchbegriff eingeben, Enter drücken (oder auf „Suchen“ klicken).
-Über die Steuerleiste Suchquelle, Anzeige-Filter, Quellen-Filter und Sortierung anpassen.
-Pro Paket: Details ansehen, installieren/deinstallieren, oder Befehl kopieren.
-Für mehrere Pakete gleichzeitig: Checkboxen anhaken → „Ausgewählte installieren“.
-Regelmäßig auf „Updates prüfen“ klicken, um das System aktuell zu halten.
-Wie es funktioniert
-Suche: ruft pacman -Ss <begriff> und yay -Ssa <begriff> als Subprozesse auf und parst deren zweizeiliges Ausgabeformat.
-Live-Installation: startet den Installationsbefehl über pty.fork() in einem eigenen Pseudo-Terminal, liest die Ausgabe zeichenweise im Hintergrund-Thread und zeigt sie live im Textfeld an. Erkennt sudo-Passwortabfragen an typischen Textmustern und öffnet dann automatisch ein maskiertes Eingabefeld; die Eingabe wird direkt in das Pseudo-Terminal geschrieben (Echo wird dabei von sudo selbst unterdrückt, das Passwort erscheint also nicht im Log).
-Kategorien: einfache Muster-Erkennung per Regex auf Paketnamen (CATEGORY_RULES in paketsuche.py) – erweiterbar nach Bedarf.
-Deinstallation
-bash
-./uninstall.sh
+## Fehlerbehebung
 
-Entfernt die Programmdatei und den Menüeintrag. customtkinter bleibt installiert (falls andere Programme es nutzen).
+- **`yay` nicht gefunden:** Repo-Suche bleibt verfügbar; installiere `yay`, um
+  AUR-Funktionen zu nutzen.
+- **Repo-Updates nicht verfügbar:** `checkupdates` ist Teil von
+  `pacman-contrib`; installiere das Paket über deine Distribution.
+- **App startet nicht:** Starte sie testweise im Terminal mit `paketsuche` oder
+  `~/.local/share/paketsuche/venv/bin/python
+  ~/.local/share/paketsuche/paketsuche.py`, um die Fehlermeldung zu sehen.
+- **Abbruch bei AUR-Builds:** Ein Build oder ein Kindprozess kann je nach
+  Paketmanager-Verhalten noch kurz zum Beenden brauchen.
 
-Troubleshooting / FAQ
+## Entwicklung und Tests
 
-„customtkinter“ wird nicht gefunden → pip install customtkinter --break-system-packages ausführen, oder install.sh erneut starten.
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m unittest discover -v
+```
 
-Keine AUR-Ergebnisse → Prüfen, ob yay installiert ist (yay --version). Ohne yay funktioniert nur die Repo-Suche.
-
-„Für Repo-Updates wird pacman-contrib benötigt“ → sudo pacman -S pacman-contrib installieren, dann liefert checkupdates Ergebnisse.
-
-Das sudo-Passwortfenster erscheint nicht → Manche Sprachumgebungen/Locales verwenden andere Prompt-Texte als „password“/„Passwort“. In dem Fall kannst du das Passwort auch direkt in das Antwort-Eingabefeld im Live-Fenster tippen und mit Enter senden.
-
-App startet, aber das Fenster ist leer/verzerrt → Sicherstellen, dass eine aktuelle customtkinter-Version installiert ist (pip install --upgrade customtkinter --break-system-packages).
-
-Roadmap
-
-Ideen für zukünftige Erweiterungen (Beiträge willkommen):
-
- Abhängigkeitsbaum-Visualisierung (pactree)
- Paket-Historie / kürzlich installierte Pakete
- Systemtray-Icon mit Update-Benachrichtigung
- AUR-Popularität/Votes über die AUR-RPC-API anzeigen
- Konfigurierbare Kategorie-Regeln über eine externe Datei
-
-Issues und Pull Requests sind jederzeit willkommen:
-
-Repository forken
-Feature-Branch erstellen (git checkout -b feature/mein-feature)
-Änderungen committen
-Branch pushen und Pull Request öffnen
-
-Medic0re.DX@proton.me
+Beiträge, Fehlerberichte und Verbesserungsvorschläge sind willkommen.

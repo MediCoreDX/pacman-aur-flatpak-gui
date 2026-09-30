@@ -13,7 +13,8 @@ Funktionen:
   - Update-Check für Repo- (checkupdates) und AUR-Pakete (yay -Qua)
  
 Abhängigkeiten:
-    pip install customtkinter --break-system-packages
+    python3 -m venv .venv
+    .venv/bin/python -m pip install -r requirements.txt
     sudo pacman -S pacman-contrib   # optional, für den Update-Check der Repos
  
 Start:
@@ -22,6 +23,7 @@ Start:
 Hinweis: Nutzt pty.fork() und ist damit auf Linux/Unix beschränkt.
 """
  
+import errno
 import json
 import os
 import re
@@ -30,8 +32,10 @@ import pty
 import signal
 import shutil
 import subprocess
+import sys
 import threading
 import time
+from tkinter import messagebox
 import customtkinter as ctk
  
 ctk.set_appearance_mode("dark")
@@ -63,6 +67,7 @@ CATEGORY_RULES = [
  
 # Einmal kompiliert statt bei jeder Suche neu (Performance)
 PACMAN_LINE_RE = re.compile(r"^(\S+)/(\S+)\s+(\S+)(.*)$")
+PACKAGE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9@._+-]*")
  
  
 def guess_category(name):
@@ -78,16 +83,25 @@ def shell_join(command_parts):
 
 
 def build_install_command(pkg):
+    name = pkg["name"]
+    if not PACKAGE_NAME_RE.fullmatch(name):
+        raise ValueError(f"Ungültiger Paketname: {name!r}")
+
     if pkg["installed"]:
-        return ["sudo", "pacman", "-Rns", pkg["name"]]
+        return ["sudo", "pacman", "-Rns", name]
     if pkg["source"] == "repo":
-        return ["sudo", "pacman", "-S", pkg["name"]]
-    return ["yay", "-S", pkg["name"]]
+        return ["sudo", "pacman", "-S", name]
+    if pkg["source"] == "aur":
+        return ["yay", "-S", name]
+    raise ValueError(f"Unbekannte Paketquelle: {pkg['source']!r}")
 
 
 def build_install_commands_for_selection(pkgs):
     repo_names = [p["name"] for p in pkgs if p["source"] == "repo"]
     aur_names = [p["name"] for p in pkgs if p["source"] == "aur"]
+    for name in repo_names + aur_names:
+        if not PACKAGE_NAME_RE.fullmatch(name):
+            raise ValueError(f"Ungültiger Paketname: {name!r}")
 
     commands = []
     if repo_names:
@@ -115,7 +129,7 @@ for command in commands:
     if result.returncode != 0:
         raise SystemExit(result.returncode)
 """
-    return ["python3", "-c", script, json.dumps(commands)]
+    return [sys.executable, "-c", script, json.dumps(commands)]
 
 
 def command_available(cmd):
@@ -173,20 +187,24 @@ class LiveOutputDialog(ctk.CTkToplevel):
         self.title(title)
         self.geometry("720x480")
 
-        if isinstance(command, (list, tuple)) and command and isinstance(command[0], (list, tuple)):
-            self.command = build_sequence_command(command)
-            self.command_display = " && ".join(shell_join(sub_cmd) for sub_cmd in command)
-        elif isinstance(command, (list, tuple)):
-            self.command = list(command)
-            self.command_display = shell_join(self.command)
+        if not isinstance(command, (list, tuple)) or not command:
+            raise TypeError("Befehle müssen als nicht-leere Argumentliste übergeben werden.")
+        if isinstance(command[0], (list, tuple)):
+            self.commands = [list(item) for item in command]
         else:
-            self.command = ["bash", "-lc", command]
-            self.command_display = command
+            self.commands = [list(command)]
+        if any(not item or not all(isinstance(arg, str) for arg in item) for item in self.commands):
+            raise ValueError("Jeder Befehl muss aus nicht-leeren Textargumenten bestehen.")
 
-        self.child_pid = None
+        self.command_display = " && ".join(shell_join(item) for item in self.commands)
+        self.process = None
         self.master_fd = None
+        self.process_lock = threading.Lock()
+        self.fd_lock = threading.Lock()
         self.awaiting_password = False
         self.finished = False
+        self.closing = False
+        self.cancel_requested = threading.Event()
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -234,26 +252,46 @@ class LiveOutputDialog(ctk.CTkToplevel):
  
     def run_process(self):
         try:
-            pid, fd = pty.fork()
-        except OSError as e:
-            self.after(0, self.append_text, f"[Fehler beim Starten: {e}]\n")
+            command = build_sequence_command(self.commands)
+            master_fd, slave_fd = pty.openpty()
+        except (OSError, ValueError) as error:
+            self.after(0, self.process_start_failed, str(error))
             return
- 
-        if pid == 0:
+
+        runner = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pty_runner.py")
+        try:
+            process = subprocess.Popen(
+                [sys.executable, runner, json.dumps(command)],
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                close_fds=True,
+                start_new_session=True,
+            )
+        except (OSError, ValueError) as error:
+            os.close(master_fd)
+            self.after(0, self.process_start_failed, str(error))
+            return
+        finally:
+            os.close(slave_fd)
+
+        with self.process_lock:
+            self.process = process
+        if self.cancel_requested.is_set():
             try:
-                os.execvp(self.command[0], self.command)
-            except Exception:
-                os._exit(1)
-            return
- 
-        self.child_pid = pid
-        self.master_fd = fd
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        with self.fd_lock:
+            self.master_fd = master_fd
         tail = ""
- 
+
         while True:
             try:
-                data = os.read(fd, 1024)
-            except OSError:
+                data = os.read(master_fd, 1024)
+            except OSError as error:
+                if error.errno not in (errno.EIO, errno.EBADF):
+                    self.after(0, self.append_text, f"\n[PTY-Fehler: {error}]\n")
                 break
             if not data:
                 break
@@ -264,44 +302,60 @@ class LiveOutputDialog(ctk.CTkToplevel):
                 self.awaiting_password = True
                 self.after(0, self.prompt_password)
  
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-        try:
-            _, status = os.waitpid(pid, 0)
-            exit_code = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
-        except Exception:
-            exit_code = -1
+        with self.fd_lock:
+            if self.master_fd == master_fd:
+                self.master_fd = None
+        os.close(master_fd)
+        exit_code = process.wait()
         self.after(0, self.on_finished, exit_code)
- 
+
+    def process_start_failed(self, error):
+        self.append_text(f"[Fehler beim Starten: {error}]\n")
+        self.on_finished(127)
+
     def prompt_password(self):
         dialog = PasswordDialog(self)
         pwd = dialog.get_password()
         self.awaiting_password = False
-        if pwd is not None and self.master_fd is not None:
-            try:
-                os.write(self.master_fd, (pwd + "\n").encode())
-            except OSError:
-                pass
- 
+        if pwd is not None:
+            self.write_to_process(pwd + "\n")
+
     def send_input_from_entry(self):
         text = self.input_entry.get()
-        if self.master_fd is not None:
-            try:
-                os.write(self.master_fd, (text + "\n").encode())
-            except OSError:
-                pass
+        self.write_to_process(text + "\n")
         self.input_entry.delete(0, "end")
- 
-    def abort_process(self):
-        if self.child_pid and not self.finished:
+
+    def write_to_process(self, text):
+        with self.fd_lock:
+            fd = self.master_fd
+            if fd is None:
+                return
             try:
-                os.kill(self.child_pid, signal.SIGTERM)
+                os.write(fd, text.encode())
+            except OSError as error:
+                self.append_text(f"\n[Eingabe konnte nicht gesendet werden: {error}]\n")
+
+    def abort_process(self):
+        self.cancel_requested.set()
+        with self.process_lock:
+            process = self.process
+        if process is not None and process.poll() is None and not self.finished:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
-            self.append_text("\n[Abgebrochen]\n")
- 
+            if not self.closing:
+                self.append_text("\n[Abbruch angefordert]\n")
+            self.after(3000, self.force_abort_process, process.pid)
+
+    def force_abort_process(self, process_id):
+        if self.finished:
+            return
+        try:
+            os.killpg(process_id, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
     def on_finished(self, exit_code):
         self.finished = True
         if exit_code == 0:
@@ -309,10 +363,15 @@ class LiveOutputDialog(ctk.CTkToplevel):
         else:
             self.status_label.configure(text=f"✗ Beendet mit Code {exit_code}.", text_color="#e74c3c")
         self.abort_button.configure(state="disabled")
- 
+        if self.closing:
+            self.destroy()
+
     def on_close(self):
         if not self.finished:
+            self.closing = True
             self.abort_process()
+            self.status_label.configure(text="Prozess wird beendet …", text_color="gray")
+            return
         self.destroy()
  
  
@@ -356,11 +415,17 @@ class DetailDialog(ctk.CTkToplevel):
 
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
-            text = result.stdout.strip() or result.stderr.strip() or "Keine Details gefunden."
+            output = result.stdout.strip() or result.stderr.strip()
+            if result.returncode:
+                text = output or f"Befehl wurde mit Exit-Code {result.returncode} beendet."
+            else:
+                text = output or "Keine Details gefunden."
         except FileNotFoundError:
             text = f"Befehl '{cmd[0]}' wurde nicht gefunden."
-        except Exception as e:
-            text = f"Fehler beim Laden der Details: {e}"
+        except subprocess.TimeoutExpired:
+            text = f"Zeitüberschreitung beim Laden der Details mit '{cmd[0]}'."
+        except OSError as error:
+            text = f"Fehler beim Laden der Details: {error}"
 
         self.after(0, self.show_text, text)
  
@@ -406,29 +471,44 @@ class UpdatesDialog(ctk.CTkToplevel):
  
     def load_updates(self):
         repo_updates = None  # None = checkupdates nicht installiert
-        aur_updates = []
+        aur_updates = None  # None = yay nicht installiert
+        errors = []
 
         if command_available("checkupdates"):
             try:
-                out = subprocess.run(
+                result = subprocess.run(
                     ["checkupdates"], capture_output=True, text=True, timeout=30
-                ).stdout
-                repo_updates = [l for l in out.strip().splitlines() if l]
-            except Exception:
+                )
+                if result.returncode not in (0, 2):
+                    errors.append(
+                        f"checkupdates fehlgeschlagen: "
+                        f"{(result.stderr or result.stdout).strip() or result.returncode}"
+                    )
+                else:
+                    repo_updates = [line for line in result.stdout.splitlines() if line]
+            except (OSError, subprocess.TimeoutExpired) as error:
                 repo_updates = []
+                errors.append(f"Repo-Update-Prüfung fehlgeschlagen: {error}")
 
         if command_available("yay"):
             try:
-                out = subprocess.run(
+                result = subprocess.run(
                     ["yay", "-Qua"], capture_output=True, text=True, timeout=30
-                ).stdout
-                aur_updates = [l for l in out.strip().splitlines() if l]
-            except Exception:
+                )
+                if result.returncode:
+                    errors.append(
+                        f"yay -Qua fehlgeschlagen: "
+                        f"{(result.stderr or result.stdout).strip() or result.returncode}"
+                    )
+                else:
+                    aur_updates = [line for line in result.stdout.splitlines() if line]
+            except (OSError, subprocess.TimeoutExpired) as error:
                 aur_updates = []
+                errors.append(f"AUR-Update-Prüfung fehlgeschlagen: {error}")
 
-        self.after(0, self.show_updates, repo_updates, aur_updates)
- 
-    def show_updates(self, repo_updates, aur_updates):
+        self.after(0, self.show_updates, repo_updates, aur_updates, errors)
+
+    def show_updates(self, repo_updates, aur_updates, errors):
         lines = []
         if repo_updates is None:
             lines.append("ℹ️  Für Repo-Updates wird 'pacman-contrib' benötigt:")
@@ -438,30 +518,43 @@ class UpdatesDialog(ctk.CTkToplevel):
             lines.extend(f"   {l}" for l in repo_updates)
         else:
             lines.append("📦 Keine Repo-Updates verfügbar.")
- 
+
         lines.append("")
- 
-        if aur_updates:
+
+        if aur_updates is None:
+            lines.append("🏗  AUR-Update-Prüfung nicht verfügbar (yay ist nicht installiert).")
+        elif aur_updates:
             lines.append(f"🏗  AUR-Updates ({len(aur_updates)}):")
             lines.extend(f"   {l}" for l in aur_updates)
         else:
-            lines.append("🏗  Keine AUR-Updates verfügbar (oder yay ist nicht installiert).")
+            lines.append("🏗  Keine AUR-Updates verfügbar.")
+
+        if errors:
+            lines.append("")
+            lines.append("⚠️  Fehler bei der Update-Prüfung:")
+            lines.extend(f"   {error}" for error in errors)
  
         self.textbox.configure(state="normal")
         self.textbox.delete("1.0", "end")
         self.textbox.insert("1.0", "\n".join(lines))
         self.textbox.configure(state="disabled")
  
-        self.total_updates = (len(repo_updates) if repo_updates else 0) + len(aur_updates)
+        self.total_updates = (len(repo_updates) if repo_updates else 0) + (
+            len(aur_updates) if aur_updates else 0
+        )
         if self.total_updates > 0:
             self.update_button.configure(state="normal")
             self.status_label.configure(text=f"{self.total_updates} Update(s) gefunden.")
+        elif errors:
+            self.status_label.configure(text="Update-Prüfung mit Fehlern beendet.")
+        elif repo_updates is None or aur_updates is None:
+            self.status_label.configure(text="Update-Prüfung teilweise verfügbar.")
         else:
             self.status_label.configure(text="System ist aktuell.")
  
     def run_update(self):
         cmd = ["yay", "-Syu"] if shutil.which("yay") else ["sudo", "pacman", "-Syu"]
-        LiveOutputDialog(self.master_app, "System-Update", cmd)
+        self.master_app.run_package_commands("System-Update", [cmd])
         self.destroy()
  
  
@@ -613,6 +706,12 @@ class PackageSearchApp(ctk.CTk):
     def start_search(self):
         query = self.search_entry.get().strip()
         if not query:
+            self.status_label.configure(text="Bitte einen Suchbegriff eingeben.")
+            return
+        if query.startswith("-"):
+            self.status_label.configure(
+                text="Suchbegriffe dürfen nicht mit einem Bindestrich beginnen."
+            )
             return
         self.cancel_event = threading.Event()
         self.all_results = []
@@ -644,15 +743,22 @@ class PackageSearchApp(ctk.CTk):
         wants_aur = source in ("Beide", "Nur AUR (yay)")
 
         self.pending_sources = set()
+        self.search_errors = []
         if wants_repo:
             self.pending_sources.add("repo")
         if wants_aur:
             self.pending_sources.add("aur")
 
         if wants_repo and not command_available("pacman"):
-            self.after(0, self.on_partial_results, "repo", [], query)
+            self.after(
+                0, self.on_partial_results, "repo", [], query,
+                "pacman wurde nicht gefunden.",
+            )
         if wants_aur and not command_available("yay"):
-            self.after(0, self.on_partial_results, "aur", [], query)
+            self.after(
+                0, self.on_partial_results, "aur", [], query,
+                "yay wurde nicht gefunden; AUR-Suche ist nicht verfügbar.",
+            )
 
         if wants_repo and command_available("pacman"):
             threading.Thread(
@@ -670,12 +776,14 @@ class PackageSearchApp(ctk.CTk):
     def _search_and_report(self, search_fn, query, cancel_event, source_key):
         """Führt eine Suche aus und meldet das Ergebnis sofort ans GUI,
         statt auf die jeweils andere (oft langsamere) Quelle zu warten."""
-        results = search_fn(query, cancel_event)
+        results, error = search_fn(query, cancel_event)
         if cancel_event.is_set():
             return
-        self.after(0, self.on_partial_results, source_key, results, query)
- 
-    def on_partial_results(self, source_key, results, query):
+        self.after(0, self.on_partial_results, source_key, results, query, error)
+
+    def on_partial_results(self, source_key, results, query, error=None):
+        if error:
+            self.search_errors.append(error)
         # Ergebnisse dieser Quelle mit ggf. schon vorhandenen anderer Quelle zusammenführen
         others = [p for p in self.all_results if p["source"] != source_key]
         combined = others + results
@@ -696,62 +804,70 @@ class PackageSearchApp(ctk.CTk):
             self.search_button.configure(state="normal", text="Suchen")
             self.cancel_button.configure(state="disabled")
             if combined:
-                self.status_label.configure(text=f"{len(combined)} Paket(e) gefunden für „{query}“.")
+                status = f"{len(combined)} Paket(e) gefunden für „{query}“."
             else:
-                self.status_label.configure(text=f"Keine Pakete für „{query}“ gefunden.")
- 
+                status = f"Keine Pakete für „{query}“ gefunden."
+            if self.search_errors:
+                warning = " ".join(dict.fromkeys(self.search_errors))
+                status = f"{status} Hinweis: {warning}"
+            self.status_label.configure(text=status)
+
         self.render_results()
- 
+
     def search_pacman(self, query, cancel_event):
-        if not command_available("pacman"):
-            return []
-        try:
-            proc = subprocess.Popen(
-                ["pacman", "-Ss", query],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-            )
-            if self.wait_or_cancel(proc, cancel_event):
-                return []
-            stdout, _ = proc.communicate()
-            return self.parse_output(stdout, source="repo")
-        except Exception:
-            return []
+        return self.search_command(["pacman", "-Ss", query], cancel_event, "repo")
 
     def search_aur(self, query, cancel_event):
-        if not command_available("yay"):
-            return []
+        return self.search_command(["yay", "-Ssa", query], cancel_event, "aur")
+
+    @classmethod
+    def search_command(cls, command, cancel_event, source, timeout=30):
         try:
             proc = subprocess.Popen(
-                ["yay", "-Ssa", query],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                start_new_session=True,
             )
-            if self.wait_or_cancel(proc, cancel_event):
-                return []
-            stdout, _ = proc.communicate()
-            return self.parse_output(stdout, source="aur")
-        except FileNotFoundError:
-            return []
-        except Exception:
-            return []
- 
-    @staticmethod
-    def wait_or_cancel(proc, cancel_event, timeout=30):
-        elapsed = 0.0
-        interval = 0.1
-        while proc.poll() is None:
+        except OSError as error:
+            return [], f"{command[0]} konnte nicht gestartet werden: {error}"
+
+        deadline = time.monotonic() + timeout
+        while True:
             if cancel_event.is_set():
-                proc.terminate()
                 try:
-                    proc.wait(timeout=2)
+                    os.killpg(proc.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                try:
+                    proc.communicate(timeout=2)
                 except subprocess.TimeoutExpired:
-                    proc.kill()
-                return True
-            time.sleep(interval)
-            elapsed += interval
-            if elapsed >= timeout:
-                proc.kill()
-                return True
-        return False
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    proc.communicate()
+                return [], None
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                proc.communicate()
+                return [], f"{command[0]} hat das Zeitlimit von {timeout} Sekunden überschritten."
+
+            try:
+                output, _ = proc.communicate(timeout=min(0.2, remaining))
+                if proc.returncode:
+                    detail = output.strip().splitlines()
+                    reason = detail[-1] if detail else f"Exit-Code {proc.returncode}"
+                    return [], f"{command[0]} fehlgeschlagen: {reason}"
+                return cls.parse_output(output, source=source), None
+            except subprocess.TimeoutExpired:
+                continue
  
     @staticmethod
     def parse_output(output, source):
@@ -958,7 +1074,25 @@ class PackageSearchApp(ctk.CTk):
         if not commands:
             return
 
-        LiveOutputDialog(self, f"Installiere {len(pkgs)} Paket(e)", commands)
+        self.run_package_commands(
+            f"Installiere {len(pkgs)} Paket(e)",
+            commands,
+        )
+
+    def run_package_commands(self, title, commands):
+        missing = sorted({
+            command[0]
+            for command in commands
+            if not command_available(command[0])
+        })
+        if missing:
+            messagebox.showerror(
+                "Befehl nicht gefunden",
+                "Folgende benötigte Programme fehlen:\n" + "\n".join(missing),
+                parent=self,
+            )
+            return
+        LiveOutputDialog(self, title, commands)
  
     # ---------- Aktionen ----------
  
@@ -972,11 +1106,11 @@ class PackageSearchApp(ctk.CTk):
  
     def install_package(self, pkg):
         cmd = build_install_command(pkg)
-        LiveOutputDialog(self, f"Installiere {pkg['name']}", cmd)
+        self.run_package_commands(f"Installiere {pkg['name']}", [cmd])
 
     def uninstall_package(self, pkg):
         cmd = build_install_command(pkg)
-        LiveOutputDialog(self, f"Deinstalliere {pkg['name']}", cmd)
+        self.run_package_commands(f"Deinstalliere {pkg['name']}", [cmd])
  
     def show_package_details(self, pkg):
         DetailDialog(self, pkg)
