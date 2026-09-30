@@ -9,6 +9,7 @@ keinen Paketmanager und umgeht keine Systemberechtigungen.
 
 - Repo- und AUR-Suche parallel mit nachladenden Teilergebnissen
 - Suche abbrechen, Ergebnisliste filtern, sortieren und seitenweise anzeigen
+- Ergebnisliste mit Mausrad scrollen (Linux, Windows und macOS)
 - Paketdetails für installierte und verfügbare Pakete
 - Pakete einzeln oder gesammelt installieren sowie installierte Pakete entfernen
 - Interaktive Paketmanager-Ausgabe einschließlich Terminal-Eingaben und

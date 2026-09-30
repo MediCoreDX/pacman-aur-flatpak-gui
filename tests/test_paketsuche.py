@@ -4,6 +4,7 @@ import sys
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import paketsuche
@@ -181,6 +182,47 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(results[0]["name"], "pkg")
         self.assertEqual(popen.call_args.args[0], ["pacman", "-Ss", query])
         self.assertFalse(popen.call_args.kwargs.get("shell", False))
+
+    def test_linux_mouse_buttons_scroll_results_when_pointer_is_inside(self):
+        canvas = Mock()
+        canvas.yview.return_value = (0.0, 0.5)
+        scrollable = Mock()
+        scrollable._parent_canvas = canvas
+        scrollable.check_if_master_is_canvas.return_value = True
+
+        result = paketsuche.scroll_frame_with_mousewheel(
+            scrollable, SimpleNamespace(widget=object(), num=4, delta=0)
+        )
+
+        self.assertEqual(result, "break")
+        canvas.yview_scroll.assert_called_once_with(-3, "units")
+
+    def test_linux_mouse_buttons_ignore_widgets_outside_results(self):
+        canvas = Mock()
+        scrollable = Mock()
+        scrollable._parent_canvas = canvas
+        scrollable.check_if_master_is_canvas.return_value = False
+
+        result = paketsuche.scroll_frame_with_mousewheel(
+            scrollable, SimpleNamespace(widget=object(), num=5, delta=0)
+        )
+
+        self.assertIsNone(result)
+        canvas.yview_scroll.assert_not_called()
+
+    def test_mousewheel_does_not_consume_event_when_content_fits(self):
+        canvas = Mock()
+        canvas.yview.return_value = (0.0, 1.0)
+        scrollable = Mock()
+        scrollable._parent_canvas = canvas
+        scrollable.check_if_master_is_canvas.return_value = True
+
+        result = paketsuche.scroll_frame_with_mousewheel(
+            scrollable, SimpleNamespace(widget=object(), num=5, delta=0)
+        )
+
+        self.assertIsNone(result)
+        canvas.yview_scroll.assert_not_called()
 
 
 if __name__ == "__main__":

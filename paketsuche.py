@@ -136,6 +136,26 @@ def command_available(cmd):
     return shutil.which(cmd) is not None
 
 
+def scroll_frame_with_mousewheel(scrollable_frame, event):
+    if not scrollable_frame.check_if_master_is_canvas(event.widget):
+        return None
+
+    if getattr(event, "num", None) == 4:
+        direction = -1
+    elif getattr(event, "num", None) == 5:
+        direction = 1
+    elif getattr(event, "delta", 0):
+        direction = -1 if event.delta > 0 else 1
+    else:
+        return None
+
+    canvas = scrollable_frame._parent_canvas
+    if canvas.yview() == (0.0, 1.0):
+        return None
+    canvas.yview_scroll(direction * 3, "units")
+    return "break"
+
+
 # ----------------------------------------------------------------------
 # Passwort-Dialog (maskierte Eingabe für sudo)
 # ----------------------------------------------------------------------
@@ -700,6 +720,16 @@ class PackageSearchApp(ctk.CTk):
         self.results_frame = ctk.CTkScrollableFrame(self, label_text="", corner_radius=10)
         self.results_frame.grid(row=6, column=0, padx=24, pady=(0, 22), sticky="nsew")
         self.results_frame.grid_columnconfigure(0, weight=1)
+        self.bind_all(
+            "<Button-4>",
+            lambda event: scroll_frame_with_mousewheel(self.results_frame, event),
+            add="+",
+        )
+        self.bind_all(
+            "<Button-5>",
+            lambda event: scroll_frame_with_mousewheel(self.results_frame, event),
+            add="+",
+        )
  
     # ---------- Suche ----------
  
