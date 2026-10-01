@@ -1049,14 +1049,15 @@ class PackageSearchApp(ctk.CTk):
 
     @classmethod
     def search_command(cls, command, cancel_event, source, timeout=30):
+        flatpak_search = source == "flatpak"
         try:
             proc = subprocess.Popen(
                 command,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                stderr=subprocess.PIPE if flatpak_search else subprocess.STDOUT,
                 text=True,
                 start_new_session=True,
-                env={**os.environ, "LC_ALL": "C"} if source == "flatpak" else None,
+                env={**os.environ, "LC_ALL": "C"} if flatpak_search else None,
             )
         except OSError as error:
             return [], f"{command[0]} konnte nicht gestartet werden: {error}"
@@ -1088,22 +1089,57 @@ class PackageSearchApp(ctk.CTk):
                 return [], f"{command[0]} hat das Zeitlimit von {timeout} Sekunden überschritten."
 
             try:
-                output, _ = proc.communicate(timeout=min(0.2, remaining))
+                output, error_output = proc.communicate(timeout=min(0.2, remaining))
+                error_output = error_output or ""
                 if proc.returncode:
-                    detail = output.strip().splitlines()
+                    failure_output = error_output.strip() or output.strip()
+                    detail = failure_output.splitlines()
                     reason = detail[-1] if detail else f"Exit-Code {proc.returncode}"
                     return [], f"{command[0]} fehlgeschlagen: {reason}"
-                if source == "flatpak":
-                    if not output.strip():
+                if flatpak_search:
+                    if not output.strip() or output.strip() == "No matches found":
+                        if error_output.strip():
+                            return [], (
+                                "Flatpak-Suche fand keine Treffer; Hinweis: "
+                                f"{cls._flatpak_diagnostic_excerpt(error_output, command)}"
+                            )
                         return [], None
                     try:
                         return json.loads(output), None
                     except json.JSONDecodeError as error:
-                        return [], f"flatpak search lieferte ungültiges JSON: {error}"
+                        excerpt = cls._flatpak_diagnostic_excerpt(output, command)
+                        return [], (
+                            "flatpak search --json lieferte ungültiges JSON "
+                            f"({error}); Ausgabe-Anfang: {excerpt!r}"
+                        )
                 return cls.parse_output(output, source=source), None
             except subprocess.TimeoutExpired:
                 continue
- 
+
+    @staticmethod
+    def _flatpak_diagnostic_excerpt(output, command, limit=240):
+        excerpt = output.strip()
+        query = command[-1] if len(command) > 1 else ""
+        if query:
+            excerpt = re.sub(
+                rf"(?<!\w){re.escape(query)}(?!\w)",
+                "[Suchbegriff]",
+                excerpt,
+                flags=re.IGNORECASE,
+            )
+        excerpt = re.sub(r"(?i)\b(bearer\s+)[^\s,;]+", r"\1[redacted]", excerpt)
+        excerpt = re.sub(
+            r"(?i)\b(password|token|secret|authorization|credential|api[_-]?key)"
+            r"(\s*[:=]\s*)[^\s,;]+",
+            r"\1\2[redacted]",
+            excerpt,
+        )
+        excerpt = re.sub(r"([a-z][a-z0-9+.-]*://)[^/@\s]+@", r"\1[redacted]@", excerpt)
+        excerpt = re.sub(r"\s+", " ", excerpt)
+        if len(excerpt) > limit:
+            excerpt = excerpt[:limit] + "…"
+        return excerpt
+
     @staticmethod
     def parse_output(output, source):
         results = []

@@ -131,6 +131,25 @@ und Launcher. Systempakete und andere Python-Installationen bleiben unverändert
   verwalten.
 - **Keine Flatpak-Ergebnisse:** Prüfe mit `flatpak remotes`, ob ein passendes
   Flatpak-Remote eingerichtet und aktiviert ist.
+- **Flatpak-Suche meldet ungültiges JSON:** Die App liest Suchdaten aus stdout
+  und Diagnosen aus stderr getrennt. Zum Prüfen beider Ausgaben (hier mit
+  `rrt` als Beispiel) starte:
+
+  ```bash
+  flatpak search --json --columns=application,name,description,version,branch,remotes rrt \
+    >/tmp/paketsuche-flatpak.stdout 2>/tmp/paketsuche-flatpak.stderr
+  result=$?
+  printf 'Exit-Code: %s\n--- stdout ---\n' "$result"
+  head -c 500 /tmp/paketsuche-flatpak.stdout
+  printf '\n--- stderr ---\n'
+  head -c 500 /tmp/paketsuche-flatpak.stderr
+  printf '\n'
+  ```
+
+  Leere stdout-Ausgabe oder Flatpaks Text `No matches found` bei Exit-Code 0
+  bedeutet keine Suchtreffer; Meldungen auf stderr allein sind kein JSON-Fehler.
+  Beende eine bereits laufende App vollständig und starte sie nach der
+  Aktualisierung neu.
 - **Repo-Updates nicht verfügbar:** `checkupdates` ist Teil von
   `pacman-contrib`; installiere das Paket über deine Distribution.
 - **App startet nicht:** Starte sie testweise im Terminal mit `paketsuche` oder
