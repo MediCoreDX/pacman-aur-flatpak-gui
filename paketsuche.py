@@ -1094,6 +1094,8 @@ class PackageSearchApp(ctk.CTk):
                     reason = detail[-1] if detail else f"Exit-Code {proc.returncode}"
                     return [], f"{command[0]} fehlgeschlagen: {reason}"
                 if source == "flatpak":
+                    if not output.strip():
+                        return [], None
                     try:
                         return json.loads(output), None
                     except json.JSONDecodeError as error:
