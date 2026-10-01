@@ -309,6 +309,57 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(popen.call_args.args[0], ["pacman", "-Ss", query])
         self.assertFalse(popen.call_args.kwargs.get("shell", False))
 
+    @patch("paketsuche.subprocess.Popen")
+    def test_flatpak_search_treats_blank_output_as_no_results(self, popen):
+        process = Mock()
+        process.communicate.return_value = (" \n\t", "")
+        process.returncode = 0
+        popen.return_value = process
+
+        results, error = paketsuche.PackageSearchApp.search_command(
+            ["flatpak", "search", "--json", "whasapp"],
+            threading.Event(),
+            "flatpak",
+        )
+
+        self.assertEqual(results, [])
+        self.assertIsNone(error)
+
+    @patch("paketsuche.subprocess.Popen")
+    def test_flatpak_search_preserves_malformed_json_diagnostic(self, popen):
+        process = Mock()
+        process.communicate.return_value = ("not json", "")
+        process.returncode = 0
+        popen.return_value = process
+
+        results, error = paketsuche.PackageSearchApp.search_command(
+            ["flatpak", "search", "--json", "whasapp"],
+            threading.Event(),
+            "flatpak",
+        )
+
+        self.assertEqual(results, [])
+        self.assertIn("flatpak search lieferte ungültiges JSON:", error)
+
+    @patch("paketsuche.subprocess.Popen")
+    def test_flatpak_search_preserves_command_failure_diagnostic(self, popen):
+        process = Mock()
+        process.communicate.return_value = ("error: no remotes configured\n", "")
+        process.returncode = 1
+        popen.return_value = process
+
+        results, error = paketsuche.PackageSearchApp.search_command(
+            ["flatpak", "search", "--json", "whasapp"],
+            threading.Event(),
+            "flatpak",
+        )
+
+        self.assertEqual(results, [])
+        self.assertEqual(
+            error,
+            "flatpak fehlgeschlagen: error: no remotes configured",
+        )
+
     def test_linux_mouse_buttons_scroll_results_when_pointer_is_inside(self):
         canvas = Mock()
         canvas.yview.return_value = (0.0, 0.5)
