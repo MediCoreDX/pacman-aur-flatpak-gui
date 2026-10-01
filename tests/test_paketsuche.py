@@ -326,20 +326,80 @@ class CommandTests(unittest.TestCase):
         self.assertIsNone(error)
 
     @patch("paketsuche.subprocess.Popen")
-    def test_flatpak_search_preserves_malformed_json_diagnostic(self, popen):
+    def test_flatpak_search_treats_no_matches_message_as_no_results(self, popen):
         process = Mock()
-        process.communicate.return_value = ("not json", "")
+        process.communicate.return_value = ("No matches found\n", "")
         process.returncode = 0
         popen.return_value = process
 
         results, error = paketsuche.PackageSearchApp.search_command(
-            ["flatpak", "search", "--json", "whasapp"],
+            ["flatpak", "search", "--json", "rrt"],
             threading.Event(),
             "flatpak",
         )
 
         self.assertEqual(results, [])
-        self.assertIn("flatpak search lieferte ungültiges JSON:", error)
+        self.assertIsNone(error)
+
+    @patch("paketsuche.subprocess.Popen")
+    def test_flatpak_search_preserves_malformed_json_diagnostic(self, popen):
+        process = Mock()
+        process.communicate.return_value = (
+            "unexpected warning for rrt: token=private-value " + ("x" * 400),
+            "separate stderr warning",
+        )
+        process.returncode = 0
+        popen.return_value = process
+
+        results, error = paketsuche.PackageSearchApp.search_command(
+            ["flatpak", "search", "--json", "rrt"],
+            threading.Event(),
+            "flatpak",
+        )
+
+        self.assertEqual(results, [])
+        self.assertIn("flatpak search --json lieferte ungültiges JSON", error)
+        self.assertIn("[Suchbegriff]", error)
+        self.assertIn("token=[redacted]", error)
+        self.assertNotIn("private-value", error)
+        self.assertLess(len(error), 400)
+        self.assertEqual(
+            popen.call_args.kwargs["stderr"],
+            subprocess.PIPE,
+        )
+
+    @patch("paketsuche.subprocess.Popen")
+    def test_flatpak_search_parses_stdout_when_stderr_contains_warning(self, popen):
+        process = Mock()
+        process.communicate.return_value = ('[{"application_id":"org.example.App"}]', "warning")
+        process.returncode = 0
+        popen.return_value = process
+
+        results, error = paketsuche.PackageSearchApp.search_command(
+            ["flatpak", "search", "--json", "example"],
+            threading.Event(),
+            "flatpak",
+        )
+
+        self.assertEqual(results, [{"application_id": "org.example.App"}])
+        self.assertIsNone(error)
+
+    @patch("paketsuche.subprocess.Popen")
+    def test_flatpak_search_reports_warning_if_stdout_is_blank(self, popen):
+        process = Mock()
+        process.communicate.return_value = ("", "warning: remote unavailable")
+        process.returncode = 0
+        popen.return_value = process
+
+        results, error = paketsuche.PackageSearchApp.search_command(
+            ["flatpak", "search", "--json", "example"],
+            threading.Event(),
+            "flatpak",
+        )
+
+        self.assertEqual(results, [])
+        self.assertIn("fand keine Treffer", error)
+        self.assertIn("remote unavailable", error)
 
     @patch("paketsuche.subprocess.Popen")
     def test_flatpak_search_preserves_command_failure_diagnostic(self, popen):
