@@ -25,6 +25,50 @@ class CommandTests(unittest.TestCase):
             ],
         )
 
+    def test_builds_flatpak_install_uninstall_and_batch_commands(self):
+        self.assertEqual(
+            paketsuche.build_install_command(
+                {
+                    "name": "org.mozilla.firefox",
+                    "source": "flatpak",
+                    "repo": "flathub",
+                    "installed": False,
+                }
+            ),
+            ["flatpak", "install", "flathub", "org.mozilla.firefox"],
+        )
+        self.assertEqual(
+            paketsuche.build_install_command(
+                {
+                    "name": "org.mozilla.firefox",
+                    "source": "flatpak",
+                    "installed": True,
+                    "installation": "user",
+                }
+            ),
+            ["flatpak", "uninstall", "--user", "org.mozilla.firefox"],
+        )
+        self.assertEqual(
+            paketsuche.build_install_commands_for_selection(
+                [
+                    {
+                        "name": "org.mozilla.firefox",
+                        "source": "flatpak",
+                        "repo": "flathub",
+                    },
+                    {
+                        "name": "com.visualstudio.code",
+                        "source": "flatpak",
+                        "repo": "flathub",
+                    },
+                ]
+            ),
+            [[
+                "flatpak", "install", "flathub",
+                "org.mozilla.firefox", "com.visualstudio.code",
+            ]],
+        )
+
     def test_rejects_invalid_package_names_and_sources(self):
         with self.assertRaises(ValueError):
             paketsuche.build_install_command(
@@ -38,6 +82,88 @@ class CommandTests(unittest.TestCase):
             paketsuche.build_install_command(
                 {"name": "foo", "source": "unknown", "installed": False}
             )
+        with self.assertRaises(ValueError):
+            paketsuche.build_install_command(
+                {
+                    "name": "org.example.App",
+                    "source": "flatpak",
+                    "repo": "--user",
+                    "installed": False,
+                }
+            )
+
+    def test_parses_flatpak_search_results_and_installed_scope(self):
+        output = """[
+          {
+            "application_id": "org.mozilla.firefox",
+            "name": "Firefox",
+            "description": "Private browser",
+            "version": "128.0",
+            "remotes": "flathub"
+          }
+        ]"""
+
+        results = paketsuche.parse_flatpak_search_output(
+            output,
+            {
+                "org.mozilla.firefox": {
+                    "installation": "user",
+                    "version": "128.0",
+                }
+            },
+        )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["name"], "org.mozilla.firefox")
+        self.assertEqual(results[0]["repo"], "flathub")
+        self.assertTrue(results[0]["installed"])
+        self.assertEqual(results[0]["installation"], "user")
+        self.assertEqual(results[0]["description"], "Private browser")
+
+    @patch("paketsuche.subprocess.run")
+    @patch.object(paketsuche.PackageSearchApp, "search_command")
+    def test_flatpak_search_marks_locally_installed_apps(self, search_command, run):
+        search_command.return_value = (
+            [{
+                "application_id": "org.mozilla.firefox",
+                "name": "Firefox",
+                "description": "Private browser",
+                "version": "128.0",
+                "remotes": "flathub",
+            }],
+            None,
+        )
+        run.return_value = SimpleNamespace(
+            returncode=0,
+            stdout='[{"application_id":"org.mozilla.firefox",'
+            '"installation":"system"}]',
+            stderr="",
+        )
+        app = paketsuche.PackageSearchApp.__new__(paketsuche.PackageSearchApp)
+
+        results, error = app.search_flatpak("firefox", threading.Event())
+
+        self.assertIsNone(error)
+        self.assertTrue(results[0]["installed"])
+        self.assertEqual(results[0]["installation"], "system")
+        self.assertEqual(run.call_args.kwargs["env"]["LC_ALL"], "C")
+
+    def test_parses_flatpak_update_json(self):
+        updates = paketsuche.parse_flatpak_updates(
+            """[{
+              "application_id": "org.mozilla.firefox",
+              "name": "Firefox",
+              "version": "128.0",
+              "branch": "stable",
+              "origin": "flathub"
+            }]"""
+        )
+
+        self.assertEqual(
+            updates,
+            ["Firefox (org.mozilla.firefox) 128.0 stable flathub"],
+        )
+
 
     def test_command_sequence_never_uses_a_shell(self):
         command = paketsuche.build_sequence_command(

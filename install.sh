@@ -54,15 +54,15 @@ with open(desktop_file, "w", encoding="utf-8") as desktop:
         "[Desktop Entry]\n"
         "Version=1.0\n"
         "Type=Application\n"
-        "Name=Paketsuche – Pacman & AUR\n"
+        "Name=Paketsuche – Pacman, AUR & Flatpak\n"
         "GenericName=Package Manager\n"
-        "Comment=Pakete in Pacman-Repositories und im AUR suchen und verwalten\n"
+        "Comment=Pakete in Pacman-Repositories, im AUR und über Flatpak verwalten\n"
         f'Exec="{escaped_launcher}"\n'
         "Icon=system-software-install\n"
         "Terminal=false\n"
         "StartupNotify=true\n"
         "Categories=Settings;PackageManager;\n"
-        "Keywords=Arch;Pacman;AUR;Paket;Package;\n"
+        "Keywords=Arch;Pacman;AUR;Flatpak;Paket;Package;\n"
     )
 PY
 chmod 644 "$DESKTOP_FILE"
@@ -72,7 +72,7 @@ if command -v update-desktop-database >/dev/null 2>&1; then
 fi
 
 echo "Paketsuche wurde für diesen Benutzer installiert."
-echo "Startmenü: Paketsuche – Pacman & AUR"
+echo "Startmenü: Paketsuche – Pacman, AUR & Flatpak"
 echo "Programm:  $LAUNCHER"
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
     echo "Hinweis: $BIN_DIR ist nicht in PATH; der Startmenü-Eintrag funktioniert trotzdem."

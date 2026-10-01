@@ -1,21 +1,24 @@
-# Paketsuche – Pacman & AUR
+# Paketsuche – Pacman, AUR & Flatpak
 
 Eine grafische Paketverwaltung für Arch Linux und Arch-basierte Distributionen
-wie Manjaro. Die App durchsucht offizielle Pacman-Repositories und optional das
-AUR über `yay`. Sie verwendet `pacman` und `yay` als Unterprozesse; sie ersetzt
-keinen Paketmanager und umgeht keine Systemberechtigungen.
+wie Manjaro. Die App durchsucht offizielle Pacman-Repositories, optional das
+AUR über `yay` sowie konfigurierte Flatpak-Remotes. Sie verwendet die jeweiligen
+Paketmanager als Unterprozesse; sie ersetzt keinen Paketmanager und umgeht
+keine Systemberechtigungen.
 
 ## Funktionen
 
 - Repo- und AUR-Suche parallel mit nachladenden Teilergebnissen
+- Suche nach Flatpak-Anwendungen in konfigurierten Remotes
 - Suche abbrechen, Ergebnisliste filtern, sortieren und seitenweise anzeigen
 - Ergebnisliste mit Mausrad scrollen (Linux, Windows und macOS)
-- Paketdetails für installierte und verfügbare Pakete
+- Paketdetails für installierte und verfügbare Pakete, einschließlich Flatpak
 - Pakete einzeln oder gesammelt installieren sowie installierte Pakete entfernen
 - Interaktive Paketmanager-Ausgabe einschließlich Terminal-Eingaben und
   maskierter `sudo`-Passwortabfrage direkt im Fenster
-- Update-Prüfung mit `checkupdates` und `yay -Qua`
+- Update-Prüfung mit `checkupdates`, `yay -Qua` und Flatpak
 - System-Update über `yay -Syu` oder, falls `yay` fehlt, `sudo pacman -Syu`
+- Flatpak-Updates über `flatpak update`
 - Paketkategorien und Kopierfunktion für Paketmanager-Befehle
 
 ## Voraussetzungen
@@ -27,10 +30,15 @@ keinen Paketmanager und umgeht keine Systemberechtigungen.
 | Pacman | Suche und Verwaltung offizieller Pakete |
 | `customtkinter` | grafische Oberfläche; installiert durch `install.sh` |
 | `yay` | AUR-Suche/-Pakete und komfortable System-Updates (optional) |
+| `flatpak` | Flatpak-Suche, Installation, Deinstallation und Updates (optional) |
 | `pacman-contrib` | Repo-Update-Prüfung mit `checkupdates` (optional) |
 
-`pacman` und `yay` müssen im `PATH` liegen. Für Systemänderungen fragt
-`sudo` nach den üblichen Rechten. Die App verlangt selbst keine Root-Rechte.
+`pacman`, `yay` und `flatpak` müssen für die jeweiligen Funktionen im `PATH`
+liegen. Flatpak-Remotes müssen bereits konfiguriert sein. Installationen
+verwenden die in Flatpak konfigurierte Standardinstallation (systemweit, sofern
+die Flatpak-Konfiguration nichts anderes vorgibt); Flatpak selbst kann für
+systemweite Änderungen eine Berechtigungsabfrage anzeigen. Pacman-Systemänderungen
+verwenden weiterhin `sudo`. Die App verlangt selbst keine Root-Rechte.
 
 ## Installation
 
@@ -46,7 +54,7 @@ ein und legt einen Startmenü-Eintrag sowie `~/.local/bin/paketsuche` an. Es
 installiert keine Systempakete und benötigt kein `sudo`. Für die
 Python-Abhängigkeit ist beim ersten Installieren eine Internetverbindung nötig.
 
-Danach kannst du **Paketsuche – Pacman & AUR** im Anwendungsmenü starten. Falls
+Danach kannst du **Paketsuche – Pacman, AUR & Flatpak** im Anwendungsmenü starten. Falls
 `~/.local/bin` in deinem `PATH` liegt, geht es auch im Terminal:
 
 ```bash
@@ -66,7 +74,8 @@ python3 -m venv .venv
 1. Suchbegriff eingeben und Enter drücken.
 2. Bei Bedarf die Suchquelle, installierten Status, Quelle oder Sortierung
    einstellen.
-3. Paketdetails ansehen oder einzelne Pakete installieren/deinstallieren.
+3. Paketdetails ansehen oder einzelne Pakete installieren/deinstallieren. Für
+   Flatpak werden die in Flatpak konfigurierten Remotes durchsucht.
 4. Für eine Sammelinstallation Pakete markieren und **Ausgewählte installieren**
    anklicken.
 5. Für Systemupdates **Updates prüfen** öffnen und anschließend bewusst
@@ -86,6 +95,8 @@ Vorschläge des Paketmanagers und AUR-Build-Skripte sorgfältig.
 - Paketnamen aus Suchergebnissen werden vor Installationsaktionen validiert.
 - `sudo` wird nur für Pacman-Aktionen verwendet, die administrative Rechte
   benötigen. AUR-Aktionen laufen als normaler Benutzer über `yay`.
+- Flatpak-Aktionen laufen über den `flatpak`-Befehl und verwenden dessen
+  konfigurierte Standardinstallation und Berechtigungsprüfung.
 - Deinstallieren verwendet `pacman -Rns`; lies die angezeigte Paketmanager-
   Zusammenfassung und bestätige nur, wenn die vorgeschlagenen Änderungen passen.
 - Die Update-Schaltfläche führt ein vollständiges Systemupgrade aus.
@@ -115,6 +126,11 @@ und Launcher. Systempakete und andere Python-Installationen bleiben unverändert
 
 - **`yay` nicht gefunden:** Repo-Suche bleibt verfügbar; installiere `yay`, um
   AUR-Funktionen zu nutzen.
+- **`flatpak` nicht gefunden:** Pacman- und AUR-Funktionen bleiben verfügbar;
+  installiere Flatpak über deine Distribution, um Flatpak-Apps zu suchen und zu
+  verwalten.
+- **Keine Flatpak-Ergebnisse:** Prüfe mit `flatpak remotes`, ob ein passendes
+  Flatpak-Remote eingerichtet und aktiviert ist.
 - **Repo-Updates nicht verfügbar:** `checkupdates` ist Teil von
   `pacman-contrib`; installiere das Paket über deine Distribution.
 - **App startet nicht:** Starte sie testweise im Terminal mit `paketsuche` oder

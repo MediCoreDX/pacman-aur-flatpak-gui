@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-Paketsuche - moderne GUI für Pacman & AUR (yay)
+Paketsuche - moderne GUI für Pacman, AUR (yay) und Flatpak
 ================================================
 Funktionen:
-  - Suche in offiziellen Repos (pacman) und/oder AUR (yay)
+  - Suche in offiziellen Repos (pacman), AUR (yay) und Flatpak-Remotes
   - Filter (installiert/nicht installiert, Quelle) und Sortierung
   - Kategorie-Erkennung mit Icon je Paket
-  - Paket-Details (pacman -Si/-Qi bzw. yay -Si)
+  - Paket-Details (pacman -Si/-Qi, yay -Si bzw. flatpak info)
   - Installieren / Deinstallieren mit LIVE-Ausgabe direkt im GUI
     (kein externes Terminal mehr nötig - inkl. grafischer Passwortabfrage)
   - Mehrfachauswahl + Sammelinstallation
-  - Update-Check für Repo- (checkupdates) und AUR-Pakete (yay -Qua)
+  - Update-Check für Repo- (checkupdates), AUR- (yay -Qua) und Flatpak-Pakete
  
 Abhängigkeiten:
     python3 -m venv .venv
@@ -87,6 +87,16 @@ def build_install_command(pkg):
     if not PACKAGE_NAME_RE.fullmatch(name):
         raise ValueError(f"Ungültiger Paketname: {name!r}")
 
+    if pkg["source"] == "flatpak":
+        if pkg["installed"]:
+            command = ["flatpak", "uninstall"]
+            if pkg.get("installation") == "user":
+                command.append("--user")
+            return [*command, name]
+        remote = pkg.get("repo", "")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", remote):
+            raise ValueError(f"Ungültige Flatpak-Gegenstelle: {remote!r}")
+        return ["flatpak", "install", remote, name]
     if pkg["installed"]:
         return ["sudo", "pacman", "-Rns", name]
     if pkg["source"] == "repo":
@@ -99,7 +109,17 @@ def build_install_command(pkg):
 def build_install_commands_for_selection(pkgs):
     repo_names = [p["name"] for p in pkgs if p["source"] == "repo"]
     aur_names = [p["name"] for p in pkgs if p["source"] == "aur"]
-    for name in repo_names + aur_names:
+    flatpak_by_remote = {}
+    for pkg in pkgs:
+        if pkg["source"] == "flatpak":
+            remote = pkg.get("repo", "")
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", remote):
+                raise ValueError(f"Ungültige Flatpak-Gegenstelle: {remote!r}")
+            flatpak_by_remote.setdefault(remote, []).append(pkg["name"])
+
+    for name in repo_names + aur_names + [
+        name for names in flatpak_by_remote.values() for name in names
+    ]:
         if not PACKAGE_NAME_RE.fullmatch(name):
             raise ValueError(f"Ungültiger Paketname: {name!r}")
 
@@ -108,6 +128,8 @@ def build_install_commands_for_selection(pkgs):
         commands.append(["sudo", "pacman", "-S", *repo_names])
     if aur_names:
         commands.append(["yay", "-S", *aur_names])
+    for remote, names in flatpak_by_remote.items():
+        commands.append(["flatpak", "install", remote, *names])
     return commands
 
 
@@ -134,6 +156,65 @@ for command in commands:
 
 def command_available(cmd):
     return shutil.which(cmd) is not None
+
+
+def parse_flatpak_search_output(output, installed_apps):
+    records = json.loads(output) if isinstance(output, str) else output
+    if not isinstance(records, list):
+        raise ValueError("Flatpak-Suchergebnis hat ein ungültiges Format.")
+
+    results = []
+    seen = set()
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        name = record.get("application_id") or record.get("application")
+        if not isinstance(name, str) or not PACKAGE_NAME_RE.fullmatch(name):
+            continue
+        remotes = record.get("remotes", "")
+        if isinstance(remotes, list):
+            remotes = remotes[0] if remotes else ""
+        if not isinstance(remotes, str):
+            continue
+        remote = remotes.split(",")[0].strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", remote):
+            continue
+        if name in seen:
+            continue
+        seen.add(name)
+        installed = installed_apps.get(name)
+        results.append({
+            "repo": remote,
+            "name": name,
+            "version": str(record.get("version", "")),
+            "installed": installed is not None,
+            "installation": installed.get("installation") if installed else None,
+            "description": str(record.get("description", "")),
+            "source": "flatpak",
+        })
+    return results
+
+
+def parse_flatpak_updates(output):
+    records = json.loads(output)
+    if not isinstance(records, list):
+        raise ValueError("Flatpak-Update-Ergebnis hat ein ungültiges Format.")
+    updates = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        application_id = record.get("application_id") or record.get("application", "")
+        name = record.get("name") or application_id
+        version = record.get("version", "")
+        branch = record.get("branch", "")
+        origin = record.get("origin", "")
+        details = " ".join(
+            str(value) for value in (name, f"({application_id})", version, branch, origin)
+            if value
+        )
+        if details:
+            updates.append(details)
+    return updates
 
 
 def scroll_frame_with_mousewheel(scrollable_frame, event):
@@ -421,7 +502,15 @@ class DetailDialog(ctk.CTkToplevel):
  
     def load_details(self):
         pkg = self.pkg
-        if pkg["installed"]:
+        if pkg["source"] == "flatpak":
+            if pkg["installed"]:
+                cmd = ["flatpak", "info"]
+                if pkg.get("installation") == "user":
+                    cmd.append("--user")
+                cmd.append(pkg["name"])
+            else:
+                cmd = ["flatpak", "remote-info", pkg["repo"], pkg["name"]]
+        elif pkg["installed"]:
             cmd = ["pacman", "-Qi", pkg["name"]]
         elif pkg["source"] == "repo":
             cmd = ["pacman", "-Si", pkg["name"]]
@@ -492,6 +581,7 @@ class UpdatesDialog(ctk.CTkToplevel):
     def load_updates(self):
         repo_updates = None  # None = checkupdates nicht installiert
         aur_updates = None  # None = yay nicht installiert
+        flatpak_updates = None  # None = flatpak nicht installiert
         errors = []
 
         if command_available("checkupdates"):
@@ -526,9 +616,35 @@ class UpdatesDialog(ctk.CTkToplevel):
                 aur_updates = []
                 errors.append(f"AUR-Update-Prüfung fehlgeschlagen: {error}")
 
-        self.after(0, self.show_updates, repo_updates, aur_updates, errors)
+        if command_available("flatpak"):
+            try:
+                result = subprocess.run(
+                    [
+                        "flatpak", "remote-ls", "--updates", "--json",
+                        "--columns=application,name,version,branch,origin",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    env={**os.environ, "LC_ALL": "C"},
+                )
+                if result.returncode:
+                    errors.append(
+                        "Flatpak-Update-Prüfung fehlgeschlagen: "
+                        f"{(result.stderr or result.stdout).strip() or result.returncode}"
+                    )
+                    flatpak_updates = []
+                else:
+                    flatpak_updates = parse_flatpak_updates(result.stdout)
+            except (OSError, subprocess.TimeoutExpired, ValueError) as error:
+                flatpak_updates = []
+                errors.append(f"Flatpak-Update-Prüfung fehlgeschlagen: {error}")
 
-    def show_updates(self, repo_updates, aur_updates, errors):
+        self.after(
+            0, self.show_updates, repo_updates, aur_updates, flatpak_updates, errors
+        )
+
+    def show_updates(self, repo_updates, aur_updates, flatpak_updates, errors):
         lines = []
         if repo_updates is None:
             lines.append("ℹ️  Für Repo-Updates wird 'pacman-contrib' benötigt:")
@@ -549,6 +665,16 @@ class UpdatesDialog(ctk.CTkToplevel):
         else:
             lines.append("🏗  Keine AUR-Updates verfügbar.")
 
+        lines.append("")
+
+        if flatpak_updates is None:
+            lines.append("📦 Flatpak-Update-Prüfung nicht verfügbar (flatpak fehlt).")
+        elif flatpak_updates:
+            lines.append(f"📦 Flatpak-Updates ({len(flatpak_updates)}):")
+            lines.extend(f"   {line}" for line in flatpak_updates)
+        else:
+            lines.append("📦 Keine Flatpak-Updates verfügbar.")
+
         if errors:
             lines.append("")
             lines.append("⚠️  Fehler bei der Update-Prüfung:")
@@ -561,7 +687,7 @@ class UpdatesDialog(ctk.CTkToplevel):
  
         self.total_updates = (len(repo_updates) if repo_updates else 0) + (
             len(aur_updates) if aur_updates else 0
-        )
+        ) + (len(flatpak_updates) if flatpak_updates else 0)
         if self.total_updates > 0:
             self.update_button.configure(state="normal")
             self.status_label.configure(text=f"{self.total_updates} Update(s) gefunden.")
@@ -573,8 +699,12 @@ class UpdatesDialog(ctk.CTkToplevel):
             self.status_label.configure(text="System ist aktuell.")
  
     def run_update(self):
-        cmd = ["yay", "-Syu"] if shutil.which("yay") else ["sudo", "pacman", "-Syu"]
-        self.master_app.run_package_commands("System-Update", [cmd])
+        commands = [
+            ["yay", "-Syu"] if shutil.which("yay") else ["sudo", "pacman", "-Syu"]
+        ]
+        if command_available("flatpak"):
+            commands.append(["flatpak", "update"])
+        self.master_app.run_package_commands("System-Update", commands)
         self.destroy()
  
  
@@ -585,7 +715,7 @@ class UpdatesDialog(ctk.CTkToplevel):
 class PackageSearchApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Paketsuche – Pacman & AUR")
+        self.title("Paketsuche – Pacman, AUR & Flatpak")
         self.geometry("1020x700")
         self.minsize(700, 480)
  
@@ -612,7 +742,7 @@ class PackageSearchApp(ctk.CTk):
         ).grid(row=0, column=0, padx=24, pady=(22, 4), sticky="w")
  
         ctk.CTkLabel(
-            self, text="Durchsucht offizielle Repos (pacman) und das AUR (yay)",
+            self, text="Durchsucht Pacman-Repos, das AUR (yay) und Flatpak-Remotes",
             text_color="gray", font=ctk.CTkFont(size=12)
         ).grid(row=1, column=0, padx=24, pady=(0, 14), sticky="w")
  
@@ -653,9 +783,10 @@ class PackageSearchApp(ctk.CTk):
             controls_frame, text="Suche in:", text_color="gray", width=LABEL_W, anchor="w"
         ).grid(row=0, column=0, sticky="w", pady=4)
         self.source_selector = ctk.CTkSegmentedButton(
-            controls_frame, values=["Beide", "Nur Pacman", "Nur AUR (yay)"]
+            controls_frame,
+            values=["Alle", "Nur Pacman", "Nur AUR (yay)", "Nur Flatpak"],
         )
-        self.source_selector.set("Beide")
+        self.source_selector.set("Alle")
         self.source_selector.grid(row=0, column=1, columnspan=3, sticky="w", pady=4)
  
         ctk.CTkButton(
@@ -678,7 +809,7 @@ class PackageSearchApp(ctk.CTk):
         ).grid(row=1, column=2, sticky="w", pady=4)
         self.filter_source_menu = ctk.CTkOptionMenu(
             controls_frame, width=150,
-            values=["Alle Quellen", "Nur Repo", "Nur AUR"],
+            values=["Alle Quellen", "Nur Repo", "Nur AUR", "Nur Flatpak"],
             command=self.on_controls_changed
         )
         self.filter_source_menu.grid(row=1, column=3, sticky="w", pady=4)
@@ -769,8 +900,9 @@ class PackageSearchApp(ctk.CTk):
     def run_search(self, query, cancel_event):
         source = self.source_selector.get()
 
-        wants_repo = source in ("Beide", "Nur Pacman")
-        wants_aur = source in ("Beide", "Nur AUR (yay)")
+        wants_repo = source in ("Alle", "Nur Pacman")
+        wants_aur = source in ("Alle", "Nur AUR (yay)")
+        wants_flatpak = source in ("Alle", "Nur Flatpak")
 
         self.pending_sources = set()
         self.search_errors = []
@@ -778,6 +910,8 @@ class PackageSearchApp(ctk.CTk):
             self.pending_sources.add("repo")
         if wants_aur:
             self.pending_sources.add("aur")
+        if wants_flatpak:
+            self.pending_sources.add("flatpak")
 
         if wants_repo and not command_available("pacman"):
             self.after(
@@ -788,6 +922,11 @@ class PackageSearchApp(ctk.CTk):
             self.after(
                 0, self.on_partial_results, "aur", [], query,
                 "yay wurde nicht gefunden; AUR-Suche ist nicht verfügbar.",
+            )
+        if wants_flatpak and not command_available("flatpak"):
+            self.after(
+                0, self.on_partial_results, "flatpak", [], query,
+                "flatpak wurde nicht gefunden; Flatpak-Suche ist nicht verfügbar.",
             )
 
         if wants_repo and command_available("pacman"):
@@ -800,6 +939,12 @@ class PackageSearchApp(ctk.CTk):
             threading.Thread(
                 target=lambda: self._search_and_report(
                     self.search_aur, query, cancel_event, "aur"
+                ), daemon=True
+            ).start()
+        if wants_flatpak and command_available("flatpak"):
+            threading.Thread(
+                target=lambda: self._search_and_report(
+                    self.search_flatpak, query, cancel_event, "flatpak"
                 ), daemon=True
             ).start()
  
@@ -826,7 +971,12 @@ class PackageSearchApp(ctk.CTk):
         still_loading = bool(self.pending_sources)
  
         if still_loading:
-            waiting_for = "AUR" if "aur" in self.pending_sources else "Repos"
+            waiting_for = next(
+                label for key, label in (
+                    ("repo", "Repos"), ("aur", "AUR"), ("flatpak", "Flatpak")
+                )
+                if key in self.pending_sources
+            )
             self.status_label.configure(
                 text=f"{len(combined)} Paket(e) bisher – warte noch auf {waiting_for} ..."
             )
@@ -850,6 +1000,53 @@ class PackageSearchApp(ctk.CTk):
     def search_aur(self, query, cancel_event):
         return self.search_command(["yay", "-Ssa", query], cancel_event, "aur")
 
+    def search_flatpak(self, query, cancel_event):
+        command = [
+            "flatpak", "search", "--json",
+            "--columns=application,name,description,version,branch,remotes",
+            query,
+        ]
+        results, error = self.search_command(command, cancel_event, "flatpak")
+        if error or cancel_event.is_set():
+            return results, error
+
+        try:
+            installed_result = subprocess.run(
+                [
+                    "flatpak", "list", "--app", "--json",
+                    "--columns=application,name,version,origin,installation",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env={**os.environ, "LC_ALL": "C"},
+            )
+            if installed_result.returncode:
+                detail = (
+                    installed_result.stderr or installed_result.stdout
+                ).strip() or installed_result.returncode
+                return [], f"flatpak list fehlgeschlagen: {detail}"
+            installed_records = json.loads(installed_result.stdout)
+            if not isinstance(installed_records, list):
+                raise ValueError("flatpak list lieferte ein ungültiges JSON-Format.")
+            installed_apps = {}
+            for record in installed_records:
+                if not isinstance(record, dict):
+                    continue
+                app_id = record.get("application_id") or record.get("application")
+                if not isinstance(app_id, str):
+                    continue
+                existing = installed_apps.get(app_id)
+                # Prefer system for a duplicate ID; user installs remain supported.
+                if existing is None or (
+                    existing.get("installation") != "system"
+                    and record.get("installation") == "system"
+                ):
+                    installed_apps[app_id] = record
+            return parse_flatpak_search_output(results, installed_apps), None
+        except (OSError, subprocess.TimeoutExpired, ValueError, json.JSONDecodeError) as error:
+            return [], f"Flatpak-Installationen konnten nicht geprüft werden: {error}"
+
     @classmethod
     def search_command(cls, command, cancel_event, source, timeout=30):
         try:
@@ -859,6 +1056,7 @@ class PackageSearchApp(ctk.CTk):
                 stderr=subprocess.STDOUT,
                 text=True,
                 start_new_session=True,
+                env={**os.environ, "LC_ALL": "C"} if source == "flatpak" else None,
             )
         except OSError as error:
             return [], f"{command[0]} konnte nicht gestartet werden: {error}"
@@ -895,6 +1093,11 @@ class PackageSearchApp(ctk.CTk):
                     detail = output.strip().splitlines()
                     reason = detail[-1] if detail else f"Exit-Code {proc.returncode}"
                     return [], f"{command[0]} fehlgeschlagen: {reason}"
+                if source == "flatpak":
+                    try:
+                        return json.loads(output), None
+                    except json.JSONDecodeError as error:
+                        return [], f"flatpak search lieferte ungültiges JSON: {error}"
                 return cls.parse_output(output, source=source), None
             except subprocess.TimeoutExpired:
                 continue
@@ -947,6 +1150,8 @@ class PackageSearchApp(ctk.CTk):
             filtered = [p for p in filtered if p["source"] == "repo"]
         elif src_filter == "Nur AUR":
             filtered = [p for p in filtered if p["source"] == "aur"]
+        elif src_filter == "Nur Flatpak":
+            filtered = [p for p in filtered if p["source"] == "flatpak"]
  
         sort_mode = self.sort_menu.get()
         if sort_mode == "Name (A-Z)":
@@ -1007,8 +1212,14 @@ class PackageSearchApp(ctk.CTk):
             command=lambda k=key, v=var: self.toggle_selection(k, v)
         ).pack(side="left", padx=(0, 10))
  
-        source_color = "#3b8ed0" if pkg["source"] == "repo" else "#9b59b6"
-        source_text = pkg["repo"].upper() if pkg["source"] == "repo" else "AUR"
+        source_color = {
+            "repo": "#3b8ed0",
+            "aur": "#9b59b6",
+            "flatpak": "#2c9c69",
+        }[pkg["source"]]
+        source_text = (
+            pkg["repo"].upper() if pkg["source"] in ("repo", "flatpak") else "AUR"
+        )
         ctk.CTkLabel(
             top_row, text=source_text, fg_color=source_color, corner_radius=6,
             width=55, height=22, font=self.font_badge
