@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Paketsuche – Pacman, AUR & Flatpak
+GenericName=Package Manager
+Comment=Pakete in Pacman-Repositories, im AUR und über Flatpak verwalten
+Exec=paketsuche
+Icon=system-software-install
+Terminal=false
+StartupNotify=true
+Categories=Settings;PackageManager;
+Keywords=Arch;Pacman;AUR;Flatpak;Paket;Package;

@@ -1,0 +1,46 @@
+# Maintainer: MediCoreDX
+pkgname=pacman-aur-flatpak-gui
+pkgver=1.0.2
+pkgrel=1
+pkgdesc="Desktop package manager for Pacman, AUR, and Flatpak"
+arch=('any')
+url="https://github.com/MediCoreDX/pacman-aur-flatpak-gui"
+license=('MIT')
+depends=('pacman' 'python' 'python-customtkinter')
+optdepends=(
+  'flatpak: manage Flatpak applications'
+  'pacman-contrib: check for repository updates'
+  'yay: search and manage AUR packages'
+)
+source=(
+  "${url}/archive/refs/tags/v${pkgver}.tar.gz"
+  "paketsuche.desktop"
+  "LICENSE"
+)
+sha256sums=(
+  'cb8499118bff88c40291d27d00ae51bbf00fde38592b6cfc5d8d0b9df97cb7d8'
+  'd76475f1bcc5573dfc2d33769f0dd0998e381e195ebb688dad0a422036b50fef'
+  'ca647a549ad27d8ab23c3495dd1308a30c415b46ad318351a22910fa53b7ec8b'
+)
+
+package() {
+  cd "${srcdir}/pacman-aur-flatpak-gui-${pkgver}"
+
+  install -Dm644 paketsuche.py \
+    "${pkgdir}/usr/share/paketsuche/paketsuche.py"
+  install -Dm644 pty_runner.py \
+    "${pkgdir}/usr/share/paketsuche/pty_runner.py"
+  install -Dm644 README.md \
+    "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+  install -Dm644 "${srcdir}/LICENSE" \
+    "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  install -Dm644 "${srcdir}/paketsuche.desktop" \
+    "${pkgdir}/usr/share/applications/paketsuche.desktop"
+
+  install -d "${pkgdir}/usr/bin"
+  cat > "${pkgdir}/usr/bin/paketsuche" <<'EOF'
+#!/bin/sh
+exec /usr/bin/python /usr/share/paketsuche/paketsuche.py "$@"
+EOF
+  chmod 755 "${pkgdir}/usr/bin/paketsuche"
+}

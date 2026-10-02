@@ -43,8 +43,8 @@ verwenden weiterhin `sudo`. Die App verlangt selbst keine Root-Rechte.
 ## Installation
 
 ```bash
-git clone https://github.com/MediCoreDX/pacman-aur-gui.git
-cd pacman-aur-gui
+git clone https://github.com/MediCoreDX/pacman-aur-flatpak-gui.git
+cd pacman-aur-flatpak-gui
 bash install.sh
 ```
 
@@ -167,3 +167,7 @@ python3 -m venv .venv
 ```
 
 Beiträge, Fehlerberichte und Verbesserungsvorschläge sind willkommen.
+
+## Lizenz
+
+Dieses Projekt steht unter der MIT-Lizenz; siehe [LICENSE](LICENSE).
